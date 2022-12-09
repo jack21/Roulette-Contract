@@ -84,13 +84,15 @@ describe("Roulette", function () {
   it("fulfillRandomWords", async function () {
     // bet
     const betAmount = await roulette.betAmount();
+    // console.log(`bet amount: ${betAmount}`);
     const tx = await roulette.connect(player).bet(0, 1, { value: betAmount });
     // requestId
     const receipt = await tx.wait();
     const betEvent = receipt.events?.find((x) => x.event == "Bet");
     const requestId = betEvent?.args.requestId;
-    // console.log(requestId);
+    console.log("requestId", requestId);
     const lastBetId = await roulette.lastBetId();
+    console.log("requestId", requestId);
     // verify
     const randomNumber = 12345;
     await expect(vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [randomNumber]))

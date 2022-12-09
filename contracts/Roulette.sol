@@ -20,7 +20,6 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   uint256 public lastBetId = 0;
 
   mapping(uint256 => uint256) public requestIdBetIdMap; // Chainlink 用，記錄 RequestId <=> Random Number
-  mapping(uint256 => uint256[]) public roundBetIds; // Key: RoundId, Value: 下注的 BetId，對應到 betInfos 的 index
 
   /*
     Depending on the BetType, number will be:
@@ -49,7 +48,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   // event ChainLinkRandomRequest(uint256 indexed requestId, uint256 indexed betId);
   event ChainLinkRandomNumber(uint256 indexed requestId, uint256 indexed betId, uint256 number);
   event Bet(address indexed player, uint256 indexed betId, uint256 requestId, uint256 betAmount, uint8 betType, uint8 betNumber);
-  event BetResult(address indexed player, uint256 indexed betId, bool indexed isWin, uint256 rewardAmount, uint256 p2eRewardAmount);
+  event BetResult(address indexed player, uint256 indexed betId, bool indexed isWin, uint256 rewardAmount);
 
   constructor(address linkToken, address vrfWrapper) VRFV2WrapperConsumerBase(linkToken, vrfWrapper) {
     payouts = [2, 3, 3, 2, 2, 36]; // 賠率
@@ -102,10 +101,9 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     // necessaryBalance += payoutForThisBet;
 
     // request Chainlink random
-    uint256 _requestId = requestRandomness(100000, 3, 1);
+    uint256 _requestId = requestRandomness(50000, 3, 1);
     requestIdBetIdMap[_requestId] = _betId;
 
-    // TODO Bet Event add requestId
     emit Bet(msg.sender, _betId, _requestId, msg.value, _betType, _betNumber);
 
     return _betId;
@@ -127,17 +125,16 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     require(!_betInfo.isOpen, "gen random number callback, but bet opened");
     _betInfo.isOpen = true;
     _betInfo.randomNumber = _randomNumber;
-    bool _isWin = _isWin(_betInfo, _randomNumber);
-    _betInfo.isWin = _isWin;
+    bool _win = _isWin(_betInfo, _randomNumber);
+    _betInfo.isWin = _win;
 
     // reward
     uint256 _betReward = 0;
-    uint256 _betP2eReward = 0;
-    if (_isWin) {
+    if (_win) {
       _betReward = betAmount * payouts[_betInfo.betType];
     }
 
-    emit BetResult(msg.sender, _betId, _isWin, _betReward, _betP2eReward);
+    emit BetResult(msg.sender, _betId, _win, _betReward);
   }
 
   /**
@@ -153,46 +150,46 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
    * 判斷是否獲勝
    */
   function _isWin(BetInfo memory _betInfo, uint256 _randomNumber) internal pure returns (bool) {
-    bool _isWin = false;
+    bool result = false;
     uint256 _betNumber = _betInfo.betNumber;
     if (_randomNumber == 0) {
-      _isWin = (_betInfo.betType == 5 && _betNumber == 0); /* bet on 0 */
+      result = (_betInfo.betType == 5 && _betNumber == 0); /* bet on 0 */
     } else {
       if (_betInfo.betType == 5) {
-        _isWin = (_betNumber == _randomNumber); /* bet on number */
+        result = (_betNumber == _randomNumber); /* bet on number */
       } else if (_betInfo.betType == 4) {
-        if (_betNumber == 0) _isWin = (_randomNumber % 2 == 0); /* bet on even */
-        if (_betNumber == 1) _isWin = (_randomNumber % 2 == 1); /* bet on odd */
+        if (_betNumber == 0) result = (_randomNumber % 2 == 0); /* bet on even */
+        if (_betNumber == 1) result = (_randomNumber % 2 == 1); /* bet on odd */
       } else if (_betInfo.betType == 3) {
-        if (_betNumber == 0) _isWin = (_randomNumber <= 18); /* bet on low 18s */
-        if (_betNumber == 1) _isWin = (_randomNumber >= 19); /* bet on high 18s */
+        if (_betNumber == 0) result = (_randomNumber <= 18); /* bet on low 18s */
+        if (_betNumber == 1) result = (_randomNumber >= 19); /* bet on high 18s */
       } else if (_betInfo.betType == 2) {
-        if (_betNumber == 0) _isWin = (_randomNumber <= 12); /* bet on 1st dozen */
-        if (_betNumber == 1) _isWin = (_randomNumber > 12 && _randomNumber <= 24); /* bet on 2nd dozen */
-        if (_betNumber == 2) _isWin = (_randomNumber > 24); /* bet on 3rd dozen */
+        if (_betNumber == 0) result = (_randomNumber <= 12); /* bet on 1st dozen */
+        if (_betNumber == 1) result = (_randomNumber > 12 && _randomNumber <= 24); /* bet on 2nd dozen */
+        if (_betNumber == 2) result = (_randomNumber > 24); /* bet on 3rd dozen */
       } else if (_betInfo.betType == 1) {
-        if (_betNumber == 0) _isWin = (_randomNumber % 3 == 1); /* bet on left column */
-        if (_betNumber == 1) _isWin = (_randomNumber % 3 == 2); /* bet on middle column */
-        if (_betNumber == 2) _isWin = (_randomNumber % 3 == 0); /* bet on right column */
+        if (_betNumber == 0) result = (_randomNumber % 3 == 1); /* bet on left column */
+        if (_betNumber == 1) result = (_randomNumber % 3 == 2); /* bet on middle column */
+        if (_betNumber == 2) result = (_randomNumber % 3 == 0); /* bet on right column */
       } else if (_betInfo.betType == 0) {
         if (_betNumber == 0) {
           /* bet on black */
           if (_randomNumber <= 10 || (_randomNumber >= 20 && _randomNumber <= 28)) {
-            _isWin = (_randomNumber % 2 == 0);
+            result = (_randomNumber % 2 == 0);
           } else {
-            _isWin = (_randomNumber % 2 == 1);
+            result = (_randomNumber % 2 == 1);
           }
         } else {
           /* bet on red */
           if (_randomNumber <= 10 || (_randomNumber >= 20 && _randomNumber <= 28)) {
-            _isWin = (_randomNumber % 2 == 1);
+            result = (_randomNumber % 2 == 1);
           } else {
-            _isWin = (_randomNumber % 2 == 0);
+            result = (_randomNumber % 2 == 0);
           }
         }
       }
     }
-    return _isWin;
+    return result;
   }
 
   /**
