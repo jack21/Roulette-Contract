@@ -43,7 +43,7 @@ async function main() {
     const tx = await roulette.bet(0, 0, { value: ethers.utils.parseEther("0.001") });
     // const receipt = await tx.wait();
     console.log("\nTest Bet Complete");
-    await roulette.withdrawLink();
+    // await roulette.withdrawLink();
   } catch (e) {
     console.error("\nTest Bet Exception\n", e);
     await roulette.withdrawLink();

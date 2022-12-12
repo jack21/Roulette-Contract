@@ -6,49 +6,40 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@chainlink/contracts/src/v0.8/VRFV2WrapperConsumerBase.sol";
 
-// import "hardhat/console.sol";
+import "hardhat/console.sol";
 
 contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBase {
   // ------------------- 輪盤基本屬性 -------------------
-  uint256 public betAmount = 1000000000000000; // 0.001 ETH，每次下注的金額
-  // TODO 之後要實作檢查預備金
-  // uint256 necessaryBalance; // 預備金的數量（防止不夠賠）
+  uint256 public betAmount = 100000000000000000; // 0.1 ETH，每次下注的金額
   uint256 public maxAmountAllowedInTheBank = 2000000000000000000; // 2 ether，銀行最多存放多少錢
   uint8[] public payouts; // 賠率 [2, 3, 3, 2, 2, 36]
   uint8[] public numberRange; // 每種 Type 可下注的數字 [1, 2, 2, 1, 1, 36]
 
   uint256 public lastBetId = 0;
 
-  mapping(uint256 => uint256) public requestIdBetIdMap; // Chainlink 用，記錄 RequestId <=> Random Number
+  mapping(uint256 => uint256) public requestIdBetIdMap; // Chainlink 用，記錄 RequestId <=> BetId
 
-  /*
-    Depending on the BetType, number will be:
-    [0] color: 0 for black, 1 for red
-    [1] column: 0 for left, 1 for middle, 2 for right
-    [2] dozen: 0 for first, 1 for second, 2 for third
-    [3] eighteen: 0 for low, 1 for high
-    [4] modulus: 0 for even, 1 for odd
-    [5] number: number
-  */
   struct BetInfo {
     uint256 betId;
     address player;
     uint256 amount; // 參加者投入的金額
     uint256 randomNumber; // chainlink random number
+    uint256 rewardAmount;
+    uint256 betTimestamp;
     uint8 betType; // 投注的類型
     uint8 betNumber; // 投注的數字
-    bool isOpen; // is chainlink random number callback
+    bool isDraw; // is chainlink random number callback
     bool isWin;
+    bool isClaimed;
   }
 
-  mapping(uint256 => BetInfo) public betInfoMap;
+  mapping(uint256 => BetInfo) public betInfoMap; // bet id -> BetInfo
   mapping(address => uint256[]) public playerBets; // Bet Player => BetId
-  mapping(address => bool) public playerBetting; // Bet Player => is betting
 
-  // event ChainLinkRandomRequest(uint256 indexed requestId, uint256 indexed betId);
   event ChainLinkRandomNumber(uint256 indexed requestId, uint256 indexed betId, uint256 number);
   event Bet(address indexed player, uint256 indexed betId, uint256 requestId, uint256 betAmount, uint8 betType, uint8 betNumber);
   event BetResult(address indexed player, uint256 indexed betId, bool indexed isWin, uint256 rewardAmount);
+  event Claim(address indexed player, uint256 betId, uint256 rewardAmount);
 
   constructor(address linkToken, address vrfWrapper) VRFV2WrapperConsumerBase(linkToken, vrfWrapper) {
     payouts = [2, 3, 3, 2, 2, 36]; // 賠率
@@ -66,16 +57,12 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
       0 - need genesis start
       1 - the value of the bet is correct (=betAmount)
       2 - betType is known (between 0 and 5)
-      3 - the option betted is valid (don't bet on 37!)
+      3 - the option betted is valid
       4 - the bank has sufficient funds to pay the bet
     */
     require(msg.value == betAmount, "Bet amount is incorrect"); // 1
     require(_betType >= 0 && _betType <= 5, "invalid bet type"); // 2
     require(_betNumber >= 0 && _betNumber <= numberRange[_betType], "invalid number"); // 3
-    // TODO 之後要實作檢查預備金
-    // uint256 payoutForThisBet = payouts[_betType] * msg.value; // 贏可以獲得的金額
-    // uint256 provisionalBalance = necessaryBalance + payoutForThisBet; // 金庫至少要有多少金額
-    // require(provisionalBalance < address(this).balance, "balance is not sufficient"); // 4
 
     // 準備 BetInfo
     lastBetId++;
@@ -87,21 +74,21 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
       betType: _betType, //
       betNumber: _betNumber, //
       randomNumber: 0,
-      isOpen: false, //
-      isWin: false //
+      betTimestamp: block.timestamp,
+      isDraw: false, //
+      isWin: false, //
+      rewardAmount: 0, //
+      isClaimed: false //
     });
     betInfoMap[_betId] = betInfo;
 
     // 處理 UserBets
     playerBets[msg.sender].push(_betId);
-    playerBetting[msg.sender] = true;
-
-    // 調整預備金
-    // TODO 之後要實作檢查預備金
-    // necessaryBalance += payoutForThisBet;
 
     // request Chainlink random
-    uint256 _requestId = requestRandomness(50000, 3, 1);
+    // whatever set gas limit to 100000, 50000, 30000, it always cost 0.25 LINK,
+    // but lower gas limit will cause fulfillRandomWords() out of gas, so 100000 gas limit should be properly
+    uint256 _requestId = requestRandomness(100000, 3, 1);
     requestIdBetIdMap[_requestId] = _betId;
 
     emit Bet(msg.sender, _betId, _requestId, msg.value, _betType, _betNumber);
@@ -113,7 +100,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
    * ChainLink random number callback function
    */
   function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override {
-    uint256 _randomNumber = _randomWords[0] % 37;
+    uint256 _randomNumber = _randomWords[0] % 36;
     uint256 _betId = requestIdBetIdMap[_requestId];
     emit ChainLinkRandomNumber(_requestId, _betId, _randomNumber);
     if (_betId == 0) {
@@ -122,8 +109,8 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
 
     // update BetInfo
     BetInfo storage _betInfo = betInfoMap[_betId];
-    require(!_betInfo.isOpen, "gen random number callback, but bet opened");
-    _betInfo.isOpen = true;
+    require(!_betInfo.isDraw, "gen random number callback, but drawed");
+    _betInfo.isDraw = true;
     _betInfo.randomNumber = _randomNumber;
     bool _win = _isWin(_betInfo, _randomNumber);
     _betInfo.isWin = _win;
@@ -132,13 +119,39 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     uint256 _betReward = 0;
     if (_win) {
       _betReward = betAmount * payouts[_betInfo.betType];
+      _betInfo.rewardAmount = _betReward;
     }
 
     emit BetResult(msg.sender, _betId, _win, _betReward);
   }
 
   /**
-   * 判斷是否獲勝
+   * 用戶領錢
+   */
+  function claim(uint256[] calldata _betIds) external nonReentrant notContract {
+    // calculate reward
+    uint256 _reward;
+    for (uint256 j = 0; j < _betIds.length; j++) {
+      uint256 _betId = _betIds[j];
+      BetInfo storage _betInfo = betInfoMap[_betId];
+      require(_betInfo.amount > 0, "!betInfo");
+      require(_betInfo.player == msg.sender, "!player");
+      require(_betInfo.isDraw, "!draw");
+      require(_betInfo.isWin, "!win");
+      require(!_betInfo.isClaimed, "claimed");
+      _betInfo.isClaimed = true;
+      _reward += _betInfo.rewardAmount;
+      emit Claim(msg.sender, _betId, _betInfo.rewardAmount);
+    }
+
+    // transfer
+    if (_reward > 0) {
+      _safeTransferETH(msg.sender, _reward);
+    }
+  }
+
+  /**
+   * check is the bet win
    */
   function isWin(uint256 _betId, uint256 _number) external view returns (bool) {
     BetInfo memory _betInfo = betInfoMap[_betId];
@@ -147,47 +160,37 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   }
 
   /**
-   * 判斷是否獲勝
+   * check is the bet win
+   * Depending on the BetType, number will be:
+   * [0] color: 0 for BLACK, 1 for RED
+   * [1] column: 0 for 1ST, 1 for 2ND, 2 for 3RD
+   * [2] dozen: 0 for 1-12, 1 for 13-24, 2 for 25-36
+   * [3] eighteen: 0 for 1-18, 1 for 19-36
+   * [4] modulus: 0 for EVEN, 1 for ODD
+   * [5] number: NUMBER
    */
   function _isWin(BetInfo memory _betInfo, uint256 _randomNumber) internal pure returns (bool) {
     bool result = false;
     uint256 _betNumber = _betInfo.betNumber;
-    if (_randomNumber == 0) {
-      result = (_betInfo.betType == 5 && _betNumber == 0); /* bet on 0 */
-    } else {
-      if (_betInfo.betType == 5) {
-        result = (_betNumber == _randomNumber); /* bet on number */
-      } else if (_betInfo.betType == 4) {
-        if (_betNumber == 0) result = (_randomNumber % 2 == 0); /* bet on even */
-        if (_betNumber == 1) result = (_randomNumber % 2 == 1); /* bet on odd */
-      } else if (_betInfo.betType == 3) {
-        if (_betNumber == 0) result = (_randomNumber <= 18); /* bet on low 18s */
-        if (_betNumber == 1) result = (_randomNumber >= 19); /* bet on high 18s */
-      } else if (_betInfo.betType == 2) {
-        if (_betNumber == 0) result = (_randomNumber <= 12); /* bet on 1st dozen */
-        if (_betNumber == 1) result = (_randomNumber > 12 && _randomNumber <= 24); /* bet on 2nd dozen */
-        if (_betNumber == 2) result = (_randomNumber > 24); /* bet on 3rd dozen */
-      } else if (_betInfo.betType == 1) {
-        if (_betNumber == 0) result = (_randomNumber % 3 == 1); /* bet on left column */
-        if (_betNumber == 1) result = (_randomNumber % 3 == 2); /* bet on middle column */
-        if (_betNumber == 2) result = (_randomNumber % 3 == 0); /* bet on right column */
-      } else if (_betInfo.betType == 0) {
-        if (_betNumber == 0) {
-          /* bet on black */
-          if (_randomNumber <= 10 || (_randomNumber >= 20 && _randomNumber <= 28)) {
-            result = (_randomNumber % 2 == 0);
-          } else {
-            result = (_randomNumber % 2 == 1);
-          }
-        } else {
-          /* bet on red */
-          if (_randomNumber <= 10 || (_randomNumber >= 20 && _randomNumber <= 28)) {
-            result = (_randomNumber % 2 == 1);
-          } else {
-            result = (_randomNumber % 2 == 0);
-          }
-        }
-      }
+    if (_betInfo.betType == 0) {
+      if (_betNumber == 0) result = (_randomNumber % 2 == 0); /* bet on BLACK */
+      if (_betNumber == 1) result = (_randomNumber % 2 == 1); /* bet on RED */
+    } else if (_betInfo.betType == 1) {
+      if (_betNumber == 0) result = (_randomNumber % 3 == 0); /* bet on 1ST */
+      if (_betNumber == 1) result = (_randomNumber % 3 == 1); /* bet on 2ND */
+      if (_betNumber == 2) result = (_randomNumber % 3 == 2); /* bet on 3RD */
+    } else if (_betInfo.betType == 2) {
+      if (_betNumber == 0) result = (_randomNumber <= 12); /* bet on 1-12 */
+      if (_betNumber == 1) result = (_randomNumber > 12 && _randomNumber <= 24); /* bet on 13-24 */
+      if (_betNumber == 2) result = (_randomNumber > 24); /* bet on 25-36 */
+    } else if (_betInfo.betType == 3) {
+      if (_betNumber == 0) result = (_randomNumber <= 18); /* bet on low 1-18 */
+      if (_betNumber == 1) result = (_randomNumber >= 19); /* bet on high 19-36 */
+    } else if (_betInfo.betType == 4) {
+      if (_betNumber == 0) result = (_randomNumber % 2 == 0); /* bet on EVEN */
+      if (_betNumber == 1) result = (_randomNumber % 2 == 1); /* bet on ODD */
+    } else if (_betInfo.betType == 5) {
+      result = (_betNumber == _randomNumber) || (_betNumber == 36 && _randomNumber == 0); /* bet on number */
     }
     return result;
   }
@@ -211,8 +214,8 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     return betInfoMap[_betId];
   }
 
-  function isPlayerBetting(address player) external view returns (bool) {
-    return playerBetting[player];
+  function calculateRequestPrice(uint32 callbackGasLimit) external view returns (uint256) {
+    return VRF_V2_WRAPPER.calculateRequestPrice(callbackGasLimit);
   }
 
   // ------------------- Owner -------------------
@@ -227,7 +230,11 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   /**
    * 項目方注入資金
    */
-  function addFund() public payable {}
+  function addFund() external payable {}
+
+  function balance() external view returns (uint256) {
+    return address(this).balance;
+  }
 
   /**
    * 項目方提款
@@ -261,9 +268,14 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   }
 
   function _safeTransferETH(address to, uint256 value) internal {
+    console.log("here1: %s -> %s", to, value);
     require(to != address(0), "invalid transfer address");
+    console.log("here2");
     require(value > 0, "transfer amount = 0");
-    payable(to).transfer(value);
+    console.log("here3");
+    (bool sent, ) = payable(to).call{ value: value }("");
+    console.log("here4: %s", sent);
+    require(sent, "!transfer");
   }
 
   function _isContract(address account) internal view returns (bool) {
