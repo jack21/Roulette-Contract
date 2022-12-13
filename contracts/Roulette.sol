@@ -51,6 +51,52 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   /**
    * 下注
    */
+  // function bets(uint8[] _betTypes, uint8[] _betNumbers) external payable whenNotPaused returns (uint256[]) {
+  //   require(_betTypes.length > 0 && _betNumbers.length > 0, "length != 0"); // 0
+  //   require(_betTypes.length == _betNumbers.length, "length not match"); // 0
+  //   require(msg.value == betAmount * _betTypes.length, "Bet amount is incorrect"); // 1
+
+  //   for (uint i = 0; i < _betTypes.length; i++) {
+  //     uint _betType = _betTypes[i];
+  //     uint _betNumber = _betNumbers[i];
+  //     require(_betType >= 0 && _betType <= 5, "invalid bet type"); // 2
+  //     require(_betNumber >= 0 && _betNumber <= numberRange[_betType], "invalid number"); // 3
+
+  //     // 準備 BetInfo
+  //     lastBetId++;
+  //     uint256 _betId = lastBetId;
+  //     BetInfo memory betInfo = BetInfo({
+  //       player: msg.sender, //
+  //       betId: _betId, //
+  //       amount: msg.value, //
+  //       betType: _betType, //
+  //       betNumber: _betNumber, //
+  //       randomNumber: 0,
+  //       betTimestamp: block.timestamp,
+  //       isDraw: false, //
+  //       isWin: false, //
+  //       rewardAmount: 0, //
+  //       isClaimed: false //
+  //     });
+  //     betInfoMap[_betId] = betInfo;
+
+  //     // 處理 UserBets
+  //     playerBets[msg.sender].push(_betId);
+  //   }
+
+  //   // request Chainlink random
+  //   // whatever gas limit is 100000, 50000, 30000, it always cost 0.25 LINK,
+  //   // but lower gas limit will cause fulfillRandomWords() out of gas, so 100000 gas limit should be properly
+  //   uint256 _requestId = requestRandomness(100000, 3, 1);
+  //   requestIdBetIdMap[_requestId] = _betId;
+  //   emit Bet(msg.sender, _betId, _requestId, msg.value, _betType, _betNumber);
+
+  //   return _betId;
+  // }
+
+  /**
+   * 下注
+   */
   function bet(uint8 _betType, uint8 _betNumber) external payable whenNotPaused returns (uint256) {
     /*
       A bet is valid when:
@@ -86,7 +132,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     playerBets[msg.sender].push(_betId);
 
     // request Chainlink random
-    // whatever set gas limit to 100000, 50000, 30000, it always cost 0.25 LINK,
+    // whatever gas limit is 100000, 50000, 30000, it always cost 0.25 LINK,
     // but lower gas limit will cause fulfillRandomWords() out of gas, so 100000 gas limit should be properly
     uint256 _requestId = requestRandomness(100000, 3, 1);
     requestIdBetIdMap[_requestId] = _betId;
