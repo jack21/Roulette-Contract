@@ -227,14 +227,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     require(LINK.transfer(msg.sender, LINK.balanceOf(address(this))), "Unable to transfer");
   }
 
-  /**
-   * 項目方注入資金
-   */
-  function addFund() external payable {}
-
-  function balance() external view returns (uint256) {
-    return address(this).balance;
-  }
+  receive() external payable {}
 
   /**
    * 項目方提款
@@ -268,13 +261,14 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   }
 
   function _safeTransferETH(address to, uint256 value) internal {
-    console.log("here1: %s -> %s", to, value);
+    // console.log("here1: %s -> %s", to, value);
     require(to != address(0), "invalid transfer address");
-    console.log("here2");
+    // console.log("here2");
     require(value > 0, "transfer amount = 0");
-    console.log("here3");
+    // console.log("here3");
+    require(value <= address(this).balance, "ETH not enough");
     (bool sent, ) = payable(to).call{ value: value }("");
-    console.log("here4: %s", sent);
+    // console.log("here4: %s", sent);
     require(sent, "!transfer");
   }
 

@@ -28,9 +28,6 @@ describe("Roulette", function () {
     [owner, player] = await ethers.getSigners();
     ({ roulette, link, vRFV2Wrapper } = await loadFixture(deployFixture));
     betAmount = await roulette.betAmount();
-
-    // give some ETH
-    // await owner.sendTransaction({ to: roulette.address, value: ethers.utils.parseEther("10") });
   });
 
   it("check initial value after deploy", async () => {
@@ -213,27 +210,37 @@ describe("Roulette", function () {
       await expect(roulette.connect(player).claim([betId])).revertedWith("!win");
     });
 
-    it("claim success with Claim event", async () => {
+    it("claim but ETH not enough", async () => {
       const { requestId, betId } = await bet(4, 0); // EVEN
       await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [10]);
-      const betInfo = await roulette.getBetInfo(betId);
-      const balanceBefore = await roulette.balance();
-      console.log("Player", player.address);
-      // console.log("Before XXX", roulette.address.balance);
-      console.log("Before", balanceBefore);
-      await expect(roulette.connect(player).claim([betId]))
-        .to.emit(roulette, "Claim")
-        .withArgs(player.address, betId, betInfo.rewardAmount)
-        .changeEtherBalance(player, betInfo.rewardAmount);
-      const balance = await roulette.balance();
-      console.log("After ", balance);
+      await expect(roulette.connect(player).claim([betId])).revertedWith("ETH not enough");
     });
 
-    it("re-claim", async () => {
-      const { requestId, betId } = await bet(4, 0); // EVEN
-      await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [10]);
-      await roulette.connect(player).claim([betId]);
-      await expect(roulette.connect(player).claim([betId])).revertedWith("claimed");
+    describe("Claim Success", () => {
+      beforeEach(async () => {
+        // give some ETH
+        await owner.sendTransaction({ to: roulette.address, value: ethers.utils.parseEther("10") });
+      });
+
+      it("claim success with Claim event", async () => {
+        // bet
+        const { requestId, betId } = await bet(4, 0); // EVEN
+        await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [10]);
+        // verify
+        const betInfo = await roulette.getBetInfo(betId);
+        await expect(roulette.connect(player).claim([betId]))
+          .to.emit(roulette, "Claim")
+          .withArgs(player.address, betId, betInfo.rewardAmount)
+          .changeEtherBalance(player, betInfo.rewardAmount)
+          .changeEtherBalance(roulette.address, betInfo.rewardAmount.mul(-1));
+      });
+
+      it("re-claim", async () => {
+        const { requestId, betId } = await bet(4, 0); // EVEN
+        await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [10]);
+        await roulette.connect(player).claim([betId]);
+        await expect(roulette.connect(player).claim([betId])).revertedWith("claimed");
+      });
     });
   });
 
