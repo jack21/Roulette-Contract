@@ -39,26 +39,26 @@ describe("Roulette", function () {
     expect(await roulette.payouts(3)).to.eql(2);
     expect(await roulette.payouts(4)).to.eql(2);
     expect(await roulette.payouts(5)).to.eql(36);
-    expect(await roulette.numberRange(0)).to.eql(1);
-    expect(await roulette.numberRange(1)).to.eql(2);
-    expect(await roulette.numberRange(2)).to.eql(2);
-    expect(await roulette.numberRange(3)).to.eql(1);
-    expect(await roulette.numberRange(4)).to.eql(1);
-    expect(await roulette.numberRange(5)).to.eql(36);
+    expect(await roulette.betNumberRange(0)).to.eql(1);
+    expect(await roulette.betNumberRange(1)).to.eql(2);
+    expect(await roulette.betNumberRange(2)).to.eql(2);
+    expect(await roulette.betNumberRange(3)).to.eql(1);
+    expect(await roulette.betNumberRange(4)).to.eql(1);
+    expect(await roulette.betNumberRange(5)).to.eql(36);
   });
 
   describe("Bet", () => {
     it("bet with Bet event", async () => {
-      await expect(roulette.connect(player).bet(0, 0, { value: betAmount })).to.emit(roulette, "Bet");
+      await expect(roulette.connect(player).bet([1], [1], { value: betAmount })).to.emit(roulette, "Bet");
     });
 
     it("bet with return betId", async () => {
-      const betId = await roulette.connect(player).callStatic.bet(0, 0, { value: betAmount });
+      const { betId } = await bet(0, 0);
       // verify
       expect(betId).to.equal(1);
     });
 
-    it("bet", async () => {
+    it("bet one shot success", async () => {
       const { requestId, betId } = await bet(1, 1);
       const latestBlock = await hre.ethers.provider.getBlock("latest");
       // verify
@@ -66,14 +66,87 @@ describe("Roulette", function () {
       const betInfo = await roulette.getBetInfo(1);
       expect(betInfo.betId).to.equal(betId);
       expect(betInfo.player).to.equal(player.address);
-      expect(betInfo.amount).to.equal(betAmount);
+      expect(betInfo.betAmount).to.equal(betAmount);
       expect(betInfo.randomNumber).to.equal(0);
       expect(betInfo.rewardAmount).to.equal(0);
-      expect(betInfo.betType).to.equal(1);
-      expect(betInfo.betNumber).to.equal(1);
+      expect(betInfo.betTypes[0]).to.equal(1);
+      expect(betInfo.betNumbers[0]).to.equal(1);
       expect(betInfo.betTimestamp).to.equal(latestBlock.timestamp);
       expect(betInfo.isDraw).to.equal(false);
-      expect(betInfo.isWin).to.equal(false);
+      expect(betInfo.isClaimed).to.equal(false);
+      // getplayerBetIds
+      const playerBetIds = await roulette.getPlayerBetIds(player.address);
+      expect(playerBetIds.length).to.equal(1);
+      // BetIds
+      const playerBetsBetId = await roulette.playerBets(player.address, 0);
+      expect(playerBetsBetId).to.equal(betId);
+    });
+  });
+
+  describe("Bet multi shot", () => {
+    it("bets but zero parameter", async () => {
+      const betTypes = [];
+      const betNumbers = [1, 1, 1, 1, 1, 1];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) })).revertedWith("length == 0");
+    });
+
+    it("bets but parameter length not match", async () => {
+      const betTypes = [0, 1, 2, 3, 4];
+      const betNumbers = [1, 1, 1, 1, 1, 1];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) })).revertedWith("length not match");
+    });
+
+    it("bets but amount incorrect", async () => {
+      const betTypes = [0, 1, 2, 3, 4, 5];
+      const betNumbers = [1, 1, 1, 1, 1, 1];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(4) })).revertedWith("Bet amount is incorrect");
+    });
+
+    it("bets but bet type incorrect", async () => {
+      const betTypes = [0, 1, 2, 3, 4, 6];
+      const betNumbers = [1, 1, 1, 1, 1, 1];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) })).revertedWith("invalid bet type");
+    });
+
+    it("bets but bet number incorrect 1", async () => {
+      const betTypes = [0, 1, 2, 3, 4, 5];
+      const betNumbers = [1, 1, 1, 1, 1, 37];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) })).revertedWith("invalid number");
+    });
+
+    it("bets but bet number incorrect 2", async () => {
+      const betTypes = [0, 1, 2, 3, 4, 5];
+      const betNumbers = [1, 1, 1, 1, 5, 0];
+      await expect(roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) })).revertedWith("invalid number");
+    });
+
+    it("bets success", async () => {
+      const betTypes = [0, 1, 2, 3, 4, 5];
+      const betNumbers = [1, 1, 1, 1, 1, 1];
+      const { requestId, betId } = await bets(betTypes, betNumbers); // RED, 2ND, 13-24, 19-36, ODD, #1
+      const latestBlock = await hre.ethers.provider.getBlock("latest");
+      // verify
+      // BetInfo
+      const betInfo = await roulette.getBetInfo(1);
+      expect(betInfo.betId).to.equal(betId);
+      expect(betInfo.player).to.equal(player.address);
+      expect(betInfo.betAmount).to.equal(betAmount);
+      expect(betInfo.randomNumber).to.equal(0);
+      expect(betInfo.rewardAmount).to.equal(0);
+      expect(betInfo.betTypes[0]).to.equal(betTypes[0]);
+      expect(betInfo.betTypes[1]).to.equal(betTypes[1]);
+      expect(betInfo.betTypes[2]).to.equal(betTypes[2]);
+      expect(betInfo.betTypes[3]).to.equal(betTypes[3]);
+      expect(betInfo.betTypes[4]).to.equal(betTypes[4]);
+      expect(betInfo.betTypes[5]).to.equal(betTypes[5]);
+      expect(betInfo.betNumbers[0]).to.equal(betNumbers[0]);
+      expect(betInfo.betNumbers[1]).to.equal(betNumbers[1]);
+      expect(betInfo.betNumbers[2]).to.equal(betNumbers[2]);
+      expect(betInfo.betNumbers[3]).to.equal(betNumbers[3]);
+      expect(betInfo.betNumbers[4]).to.equal(betNumbers[4]);
+      expect(betInfo.betNumbers[5]).to.equal(betNumbers[5]);
+      expect(betInfo.betTimestamp).to.equal(latestBlock.timestamp);
+      expect(betInfo.isDraw).to.equal(false);
       expect(betInfo.isClaimed).to.equal(false);
       // getplayerBetIds
       const playerBetIds = await roulette.getPlayerBetIds(player.address);
@@ -93,6 +166,13 @@ describe("Roulette", function () {
       .withArgs(requestId, betId, randomNumber % 36);
   });
 
+  it("re-fulfillRandomWords", async () => {
+    const { requestId, betId } = await bet(0, 1); // RED
+    // verify
+    expect(await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [12345]));
+    await expect(vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [54321])).revertedWith("drawed");
+  });
+
   describe("Bet result", () => {
     let requestId, betId;
     describe("Bet COLOR result", () => {
@@ -101,7 +181,7 @@ describe("Roulette", function () {
       });
 
       it("win with right reward", async () => {
-        await win(101, 2);
+        await win(95, 2);
       });
 
       it("lose with right result", async () => {
@@ -115,11 +195,11 @@ describe("Roulette", function () {
       });
 
       it("win with right reward", async () => {
-        await win(100, 3);
+        await win(101, 3);
       });
 
       it("lose with right result", async () => {
-        await lose(101);
+        await lose(100);
       });
     });
 
@@ -171,7 +251,6 @@ describe("Roulette", function () {
       expect(betInfo.randomNumber).to.equal(randomNumber % 36);
       expect(betInfo.rewardAmount).to.equal(betAmount.mul(payout));
       expect(betInfo.isDraw).to.equal(true);
-      expect(betInfo.isWin).to.equal(true);
       expect(betInfo.isClaimed).to.equal(false);
     };
 
@@ -181,9 +260,51 @@ describe("Roulette", function () {
       expect(betInfo.randomNumber).to.equal(randomNumber % 36);
       expect(betInfo.rewardAmount).to.equal(0);
       expect(betInfo.isDraw).to.equal(true);
-      expect(betInfo.isWin).to.equal(false);
       expect(betInfo.isClaimed).to.equal(false);
     };
+
+    describe("Bet multi result", () => {
+      let requestId, betId;
+      beforeEach(async () => {
+        const betTypes = [0, 1, 2, 3, 4, 5];
+        const betNumbers = [1, 1, 1, 1, 1, 23];
+        ({ requestId, betId } = await bets(betTypes, betNumbers)); // RED, 2ND, 13-24, 19-36, ODD, #23
+      });
+
+      it("win with right reward 1", async () => {
+        const randomNumber = 23;
+        const rewardAmount = betAmount
+          .mul(2) // RED
+          .add(betAmount.mul(3)) // 2ND
+          .add(betAmount.mul(3)) // 13-24
+          .add(betAmount.mul(2)) // 19-36
+          .add(betAmount.mul(2)) // ODD
+          .add(betAmount.mul(36)); // #23
+        await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [randomNumber]);
+        const betInfo = await roulette.getBetInfo(betId);
+        expect(betInfo.randomNumber).to.equal(randomNumber % 36);
+        expect(betInfo.rewardAmount).to.equal(rewardAmount);
+        expect(betInfo.isDraw).to.equal(true);
+        expect(betInfo.isClaimed).to.equal(false);
+      });
+
+      it("win with right reward 2", async () => {
+        const randomNumber = 3;
+        const rewardAmount = betAmount
+          .mul(2) // RED
+          // .add(betAmount.mul(3)) // 2ND
+          // .add(betAmount.mul(3)) // 13-24
+          // .add(betAmount.mul(2)) // 19-36
+          .add(betAmount.mul(2)); // ODD
+        // .add(betAmount.mul(36)); // #23
+        await vRFV2Wrapper.rawFulfillRandomWords(roulette.address, requestId, [randomNumber]);
+        const betInfo = await roulette.getBetInfo(betId);
+        expect(betInfo.randomNumber).to.equal(randomNumber % 36);
+        expect(betInfo.rewardAmount).to.equal(rewardAmount);
+        expect(betInfo.isDraw).to.equal(true);
+        expect(betInfo.isClaimed).to.equal(false);
+      });
+    });
   });
 
   describe("Claim", () => {
@@ -218,7 +339,7 @@ describe("Roulette", function () {
 
     describe("Claim Success", () => {
       beforeEach(async () => {
-        // give some ETH
+        // give ETH to Contract
         await owner.sendTransaction({ to: roulette.address, value: ethers.utils.parseEther("10") });
       });
 
@@ -245,8 +366,12 @@ describe("Roulette", function () {
   });
 
   const bet = async (betType, betNumber) => {
+    return bets([betType], [betNumber]);
+  };
+
+  const bets = async (betTypes, betNumbers) => {
     // bet
-    const tx = await roulette.connect(player).bet(betType, betNumber, { value: betAmount });
+    const tx = await roulette.connect(player).bet(betTypes, betNumbers, { value: betAmount.mul(betTypes.length) });
     // requestId
     const receipt = await tx.wait();
     const betEvent = receipt.events?.find((x) => x.event == "Bet");
