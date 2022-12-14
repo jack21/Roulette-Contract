@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@chainlink/contracts/src/v0.8/VRFV2WrapperConsumerBase.sol";
 
-import "hardhat/console.sol";
+// import "hardhat/console.sol";
 
 contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBase {
   // ------------------- 輪盤基本屬性 -------------------
@@ -33,6 +33,11 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     bool isClaimed;
   }
 
+  // ------------------- Chainlink -------------------
+  uint32 callbackGasLimit = 100000;
+  uint32 numWords = 1;
+  uint16 requestConfirmations = 3;
+
   mapping(uint256 => BetInfo) public betInfoMap; // bet id -> BetInfo
   mapping(address => uint256[]) public playerBets; // Bet Player => BetId
 
@@ -51,7 +56,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   /**
    * 下注
    */
-  function bet(uint8[] memory _betTypes, uint8[] memory _betNumbers) external payable whenNotPaused returns (uint256) {
+  function bet(uint8[] memory _betTypes, uint8[] memory _betNumbers) external payable whenNotPaused nonReentrant notContract returns (uint256) {
     require(_betTypes.length > 0 && _betNumbers.length > 0, "length == 0"); // 0
     require(_betTypes.length == _betNumbers.length, "length not match"); // 0
     require(msg.value == betAmount * _betTypes.length, "Bet amount is incorrect"); // 1
@@ -81,9 +86,9 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     betInfoMap[_betId] = betInfo;
 
     // request Chainlink random
-    // whatever gas limit is 100000, 50000, 30000, it always cost 0.25 LINK,
+    // whatever gas limit is 100000 or 50000 or 30000, requesting randomness always cost 0.25 LINK,
     // but lower gas limit will cause fulfillRandomWords() out of gas, so 100000 gas limit should be properly
-    uint256 _requestId = requestRandomness(100000, 3, 1);
+    uint256 _requestId = requestRandomness(callbackGasLimit, requestConfirmations, numWords);
 
     // 處理 BetId
     playerBets[msg.sender].push(_betId);
@@ -131,7 +136,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   /**
    * 用戶領錢
    */
-  function claim(uint256[] calldata _betIds) external nonReentrant notContract {
+  function claim(uint256[] calldata _betIds) external whenNotPaused nonReentrant notContract {
     // calculate reward
     uint256 _reward;
     for (uint256 j = 0; j < _betIds.length; j++) {
@@ -195,7 +200,7 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
     return playerBets[player];
   }
 
-  function getStatus() public view returns (uint256, address, address) {
+  function getStatus() external view returns (uint256, address, address) {
     return (
       LINK.balanceOf(address(this)), // roulette balance
       address(LINK),
@@ -235,25 +240,34 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
 
   // ------------------- Owner -------------------
 
-  /**
-   * Allow withdraw of Link tokens from the contract
-   */
-  function withdrawLink() public onlyOwner {
-    require(LINK.transfer(msg.sender, LINK.balanceOf(address(this))), "Unable to transfer");
-  }
-
   receive() external payable {}
 
   /**
-   * 項目方提款
+   * Withdraw Link tokens from the contract
+   */
+  function withdrawLink() external onlyOwner {
+    bool isSuccess = LINK.transfer(msg.sender, LINK.balanceOf(address(this)));
+    require(isSuccess, "Unable to transfer");
+  }
+
+  /**
+   * Withdraw ETH
    */
   function withdraw(uint256 _amount) external onlyOwner {
-    // TODO 要檢查提領後的金額，要滿足預備金
     _safeTransferETH(owner(), _amount);
   }
 
   /**
-   * 自殺
+   * Update Chainlink config
+   */
+  function updateChainlink(uint32 _callbackGasLimit, uint32 _numWords, uint16 _requestConfirmations) external onlyOwner {
+    callbackGasLimit = _callbackGasLimit;
+    numWords = _numWords;
+    requestConfirmations = _requestConfirmations;
+  }
+
+  /**
+   * bye-bye
    */
   function kill() external onlyOwner {
     selfdestruct(payable(owner()));
@@ -276,14 +290,10 @@ contract Roulette is Ownable, Pausable, ReentrancyGuard, VRFV2WrapperConsumerBas
   }
 
   function _safeTransferETH(address to, uint256 value) internal {
-    // console.log("here1: %s -> %s", to, value);
     require(to != address(0), "invalid transfer address");
-    // console.log("here2");
     require(value > 0, "transfer amount = 0");
-    // console.log("here3");
     require(value <= address(this).balance, "ETH not enough");
     (bool sent, ) = payable(to).call{ value: value }("");
-    // console.log("here4: %s", sent);
     require(sent, "!transfer");
   }
 
